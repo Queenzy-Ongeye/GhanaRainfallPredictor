@@ -2,7 +2,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
 class GhanaRainfallPredictor:
     """
     A machine learning pipeline for predicting rainfall intensity (heavy/moderate/small)
@@ -293,5 +296,74 @@ class GhanaRainfallPredictor:
             ]
         )
         return self.preprocessor
+    
+    # preparing target feature
+    def prepare_features_and_target(self, df, target_column = 'Target'):
+        # 1. features to exclude from modeling
+        exclude_features = [target_column, 'ID', 'prediction_time']
+
+        # 2. Separate features and target
+        feature_columns = [col for col in df.columns if col not in exclude_features]
+        X = df[feature_columns]
+        y = df[target_column]
+
+        print(f"Using {len(feature_columns)} fetures for modeling")
+        print(f"Features: {feature_columns}")
+
+        # 3. encoding target variable
+        self.label_encoder = LabelEncoder()
+        y_encoded = self.label_encoder.fit_transform(y)
+
+        print(f"\nTargt classes: {self.label_encoder.classes_}")
+        print(f"Target distribution")
+
+        for i, cls in enumerate(self.label_encoder.classes_):
+            count = np.sum(y_encoded == i)
+            print(f"{cls}: {count} ({count/len(y_encoded) * 100:.1f}%)")
+        return X, y_encoded
+    
+    # building an ensemble model
+    def build_ensemble_model(self):
+        # Individual models
+        ## 1. Random Forest Classifier
+        rf = RandomForestClassifier(
+            n_estimators= 200,
+            max_depth= 15,
+            min_samples_leaf= 5,
+            min_samples_leaf= 2,
+            random_state= 42,
+            class_weight= 'balanced'
+        )
+
+        ## 2. Gradient Booster Classifier
+        gb = GradientBoostingClassifier(
+            n_estimators= 150,
+            learning_rate= 0.1,
+            max_depth= 8,
+            random_state= 42
+        )
+
+        ## 3. SVC
+        svm = SVC(
+            kernel= 'rbf',
+            C= 1.0,
+            class_weight= 'balanced',
+            probability= True,
+            random_state= 42
+        )
+
+        # Ensemble model
+        self.model = VotingClassifier(
+            estimators= [
+                ('rf', 'rf'),
+                ('gb', 'gb'),
+                ('svm', 'svm')
+            ],
+            voting= 'soft'
+        )
+
+        return self.model
+
+
 
    
