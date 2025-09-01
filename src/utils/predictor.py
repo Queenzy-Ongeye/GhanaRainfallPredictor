@@ -1,6 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
+from sklearn.compose import ColumnTransformer
 
 class GhanaRainfallPredictor:
     """
@@ -279,7 +280,7 @@ class GhanaRainfallPredictor:
     # Creating a preprocessing pipeline
     def create_preprocessing_pipeline(self):
         # 1. Preprocessing numerical features
-        numerical_transformer = StanderdScaler()
+        numerical_transformer = StandardScaler()
 
         # 2. Preprocessing Categorical features
         categorical_transformer = OneHotEncoder(handle_unknown = 'ignore', sparse_output = False)
