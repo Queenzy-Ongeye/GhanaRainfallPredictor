@@ -1,5 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
+
 class GhanaRainfallPredictor:
     """
     A machine learning pipeline for predicting rainfall intensity (heavy/moderate/small)
@@ -273,5 +275,22 @@ class GhanaRainfallPredictor:
         self.numerical_features = numerical_features
         self.processed_df = processed_df
         return processed_df
+    
+    # Creating a preprocessing pipeline
+    def create_preprocessing_pipeline(self):
+        # 1. Preprocessing numerical features
+        numerical_transformer = StanderdScaler()
+
+        # 2. Preprocessing Categorical features
+        categorical_transformer = OneHotEncoder(handle_unknown = 'ignore', sparse_output = False)
+
+        # 3. Combining preprocessing steps
+        self.preprocessor = ColumnTransformer(
+            transformers = [
+                ('num', numerical_transformer, self.numerical_features),
+                ('cat', categorical_transformer, self.categorical_features)
+            ]
+        )
+        return self.preprocessor
 
    
