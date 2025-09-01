@@ -61,12 +61,21 @@ class GhanaRainfallPredictor:
         processed_df = df.copy()
         print("=== Preprocessing Ghana Rainfall Data ===")
 
-        # Handling missing indicators
-        processed_df['indicator'] = processed_df['indicator'].fillna('no_indicator')
-        processed_df['indicator_desc'] = processed_df['indicator_desc'].fillna('no_description')
+        # Drop columns with excessive missing values (>90%)
+        columns_to_drop = []
+        missing_threshold = 0.9  # 90% threshold
+        
+        for col in df.columns:
+            missing_pct = df[col].isnull().sum() / len(df)
+            if missing_pct > missing_threshold:
+                columns_to_drop.append(col)
+                print(f"Dropping {col}: {missing_pct:.1%} missing values")
+        
+        processed_df = processed_df.drop(columns = columns_to_drop)
 
-        # Handling time_observed with high missing values
-        processed_df['time_observed'] = processed_df['time_observed'].fillna('not_specified')
+        # Handling missing indicators
+        if 'indicator' in processed_df.columns:
+            processed_df['indicator'] = processed_df['indicator'].fillna('no_indicator')
 
         # convert prediction_time to datetime features
         if 'prediction_time' in processed_df.columns:
@@ -78,5 +87,61 @@ class GhanaRainfallPredictor:
 
             # creating a time-based feature for agricultural context
             processed_df['is_morning'] = (processed_df['hour'] >= 6) & (processed_df['hour'] < 12)
-            processed_df
+            processed_df['is_afternoon'] = (processed_df['hour'] >= 12)  & (processed_df['hour'] < 18)
+            processed_df['is_evening'] = (processed_df['hour'] >= 18) & (processed_df['hour'] < 22)
+            processed_df['is_night'] = (processed_df['hour'] >= 22) & (processed_df['hour'] < 6)
+        
+        # creating farmer experience proxy based 
+        user_submission_counts = processed_df['user_id'].value_counts()
+        processed_df['farmer_experience_level'] = processed_df['user_id'].map(user_submission_counts)
+        processed_df['is_experienced_farmer'] = (processed_df['farmer_experience_level'] >= processed_df['farmer_experience_level'].quantile(0.75)).astype(int)
+
+        # creating a community-based feature (local knowledge patterns)
+        community_avg_confidence = processed_df.groupby('community')['confidence'].mean()
+        processed_df['community_avg_confidence'] = processed_df['community'].map(community_avg_confidence)
+
+        # creating a district based feature
+        district_avg_confidence = processed_df.groupby('district')['confidence'].mean()
+        processed_df['district_avg_confidence'] = processed_df['district'].map(district_avg_confidence)
+
+        # creating an indicator availability flag
+        if 'indicator' in processed_df.columns:
+            processed_df['has_indicator'] = (processed_df['indicator'] != 'no_indicator').astype(int)
+        
+        # Defining categorical and numerical features
+        categorical_features = ['indicator', 'community', 'district', 'target']
+
+        # Adding time-based categorical features
+        if 'day_of_week' in processed_df.columns:
+            categorical_features.extend(['day_of_week', 'month'])
+        
+        # Defining numerical features
+        numerical_features = [
+            'farmer_experience_level', 'community_avg_confidence', 'district_avg_confidence',
+            'prediction_intensity', 'confidence', 'is_weekend', 'is_experienced_farmer', 'forecast_length'
+        ]
+
+        # adding indicator flag if it exists
+        if 'has_indicator' in processed_df.columns:
+            numerical_features.append('has_indicator')
+        
+        # Adding time features
+        time_features = ['hour', 'is_morning', 'is_afternoon', 'is_evening', 'is_night']
+        for feat in time_features:
+            if feat in processed_df.columns:
+                numerical_features.append(feat)
+
+        # filter features that exist in the dataset
+        categorical_features = [f for f in categorical_features if f in processed_df.columns]
+        numerical_features = [f for f in numerical_features if f in processed_df.columns]
+
+        print(f"After dropping sparse columns: ")
+        print(f"Categorical feature ({len(categorical_features)}): {categorical_features}")
+        print(f"Numerical feature ({len(numerical_features)}): {numerical_features}")
+
+        # storing features in a list
+        self.categorical_features = categorical_features
+        self.numerical_features = numerical_features
+
+        # 
 
