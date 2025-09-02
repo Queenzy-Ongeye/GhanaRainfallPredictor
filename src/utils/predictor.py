@@ -6,6 +6,16 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from imblearn.over_sampling import SMOTE
+import seaborn as sns
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.feature_selection import SelectKBest, chi2, f_classif
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+import warnings
+
+warnings.filterwarnings('ignore')
+
 class GhanaRainfallPredictor:
     """
     A machine learning pipeline for predicting rainfall intensity (heavy/moderate/small)
@@ -225,9 +235,10 @@ class GhanaRainfallPredictor:
                 processed_df['prediction_time'], errors = 'coerce'
             )
             processed_df['hour'] = processed_df['prediction_time'].dt.hour
-            processed_df['day_of_week'] = processed_df['prediction_time'].dt.day_of_week
+            processed_df['day_of_week'] = processed_df['prediction_time'].dt.dayofweek
             processed_df['month'] = processed_df['prediction_time'].dt.month
-            processed_df['is_weekend'] = processed_df['prediction_time'].isin([5, 6]).astype(int)
+            processed_df['is_weekend'] = processed_df['day_of_week'].isin([5, 6]).astype(int)
+
 
             # time flags
             processed_df['is_morning'] = processed_df['hour'].between(6, 11, inclusive = 'both').astype(int)
@@ -258,7 +269,7 @@ class GhanaRainfallPredictor:
             processed_df['has_indicator'] = (processed_df['indicator'] != 'no_indicator').astype(int)
         
         # 7) Assemble feature lists (use only columns that exist)
-        categorical_features = ['indicator', 'community', 'district', 'Target']  # 'Target' capitalized
+        categorical_features = ['indicator', 'community', 'district']  # 'Target' capitalized
         if 'day_of_week' in processed_df.columns:
             categorical_features += ['day_of_week', 'month']
         categorical_features = [c for c in categorical_features if c in processed_df.columns]
@@ -329,7 +340,7 @@ class GhanaRainfallPredictor:
         rf = RandomForestClassifier(
             n_estimators= 200,
             max_depth= 15,
-            min_samples_leaf= 5,
+            min_samples_split= 5,
             min_samples_leaf= 2,
             random_state= 42,
             class_weight= 'balanced'
@@ -355,14 +366,230 @@ class GhanaRainfallPredictor:
         # Ensemble model
         self.model = VotingClassifier(
             estimators= [
-                ('rf', 'rf'),
-                ('gb', 'gb'),
-                ('svm', 'svm')
+                ('rf', rf),
+                ('gb', gb),
+                ('svm', svm)
             ],
             voting= 'soft'
         )
 
         return self.model
+    
+    # training the model
+    def train_model(self, X, y, use_smote = True):
+        # 1. Split the data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+        # 2. create preprocessing pipeline
+        preprocessing_pipeline = self.create_preprocessing_pipeline()
+
+        # 3. fit the preprocessor and the transformed data
+        X_train_processed = preprocessing_pipeline.fit_transform(X_train)
+        X_test_processed = preprocessing_pipeline.transform(X_test)
+
+        # 4. Handling class imbalance with SMOTE
+        if use_smote:
+            smote = SMOTE(random_state= 42)
+            X_train_processed, y_train = smote.fit_resample(X_train_processed, y_train)
+            print("Applied SMOTE for class balancing")
+        
+        # 5. Building and train model
+        model = self.build_ensemble_model()
+        model.fit(X_train_processed, y_train)
+
+        # 6. make predictions
+        y_pred = model.predict(X_test_processed)
+        y_pred_proba = model.predict_proba(X_test_processed)
+
+        # 7. Evaluating performance
+        accuracy = accuracy_score(y_test, y_pred)
+        print(f"\nModel Performance: ")
+        print(f"Accuracy: {accuracy:.4f}")
+
+        # 8. classification report
+        target_names = self.label_encoder.classes_
+        print(f"\nClassification Report: ")
+        print(classification_report(y_test, y_pred, target_names=target_names))
+
+        # 9. cross-validation
+        cv_scores = cross_val_score(
+            model, X_train_processed, y_train,
+            cv = StratifiedKFold(n_splits= 5, shuffle = True, random_state= 42),
+            scoring= 'accuracy'
+        )
+
+        print(f"\nCross-validatio  scores: {cv_scores}")
+        print(f"\nCV Mean: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
+
+
+        # Store results
+        self.performance_metrics = {
+            'accuracy': accuracy,
+            'cv_mean': cv_scores.mean(),
+            'cv_std': cv_scores.std(),
+            'classification_report': classification_report(y_test, y_pred, target_names= target_names),
+            'confucion_matrix': confusion_matrix(y_test, y_pred)
+        }
+
+        # Storing final model components
+        self.final_model = model
+        self.X_test = X_test_processed
+        self.y_test = y_test
+        self.y_pred = y_pred
+
+        return model, preprocessing_pipeline
+    
+    def analyze_feature_importance(self, model, feature_names = None):
+        if hasattr(model.named_estimators_['rf'], 'feature_importances_'):
+            importances = model.named_estimators_['rf'].feature_importances_
+
+            if feature_names is None:
+                # creating feature names from preprocessor
+                if hasattr(self.preprocessor, 'get_feature_names_out'):
+                    feature_names = self.preprocessor.get_feature_names_out
+                else:
+                    feature_names = [f'feature_{i}' for i in range(len(importances))]
+            
+            # creating importance dataframe
+            importance_df = pd.DataFrame({
+                'feature': feature_names,
+                'importance': importances
+            }).sort_values('importance', ascending = False)
+
+            print("\nTop 15 Most importance Indigenous Indicators:")
+            print(importance_df.head(15))
+
+            # Plotting feature importance
+            plt.figure(figsize = (12, 8))
+            plt.barh(range(15), importance_df['importance'].head(15))
+            plt.yticks(range(15), importance_df['feature'].head(15))
+            plt.xlabel('Feature Importance')
+            plt.title('Top 15 Indigenous Weather Indicators for Rainfall Predictor')
+            plt.tight_layout()
+            plt.show()
+
+            return importance_df
+    
+    # making prediction for new data
+    def predict_new_data(self, new_data):
+        if self.final_model is None or self.preprocessor is None:
+            raise ValueError("Model must be trained first")
+        
+        # preprocess new data
+        new_data_processed = self.preprocessor.transform(new_data)
+
+        # Make predictions
+        predictions = self.final_model.predict(new_data_processed)
+        probabilities = self.final_model.predict_proba(new_data_processed)
+
+        # convert back to original labels
+        predicted_labels = self.label_encoder.inverse_transform(predictions)
+
+        # create results dataframe
+        results = pd.DataFrame({
+            'predicted_rainfall': predicted_labels,
+            'confidence': np.max(probabilities, axis= 1)
+        })
+
+        # Add probability colums for ech class
+        for i, class_name in enumerate(self.label_encoder.classes_):
+            results[f'prob_{class_name}'] = probabilities[:, i]
+        
+        return results
+    
+    # generating insights
+    def generate_insights(self):
+        insights = []
+
+        # Accuracy insights
+        acc = self.performance_metrics['accuracy']
+
+        if acc > 0.8:
+            insights.append(f"Excellent model performance with {acc: .1%} accuracy, suggesting indigenous indicators are highly predictive of rainfall patterns.")
+        elif acc > 0.6:
+            insights.append(f"Good model performance with {acc:.1%} accuracy, validating the effectiveness of traditional weather knowledge.")
+        else:
+            insights.append(f"Moderate accuracy of {acc:.1%} suggests need for additional indicators or data refinement.")
+        
+        # Class balance insights
+        conf_matrix = self.performance_metrics['confucion_matrix']
+        insights.append("Confusion matrix analysis reveals which rainfall categories are most challenging to predict using traditional indicators.")
+
+        print("=== Indigenous Weather Forecasting Insights ===")
+        for insight in insights:
+            print(insight)
+        
+        return insights
+    
+    # testing the model
+    def test_on_file(self, test_file, target_column="Target"):
+        test_df = pd.read_csv(test_file)
+        processed_test = self.preprocess_data(test_df)
+
+        # Separate features and target if available
+        if target_column in processed_test.columns:
+            y_true = processed_test[target_column]
+            exclude = [target_column, "ID", "prediction_time", "user_id"]
+        else:
+            y_true = None
+            exclude = ["ID", "prediction_time", "user_id"]
+
+        X_test = processed_test[[c for c in processed_test.columns if c not in exclude]]
+        X_test_processed = self.preprocessor.transform(X_test)
+
+        # Predict
+        preds = self.final_model.predict(X_test_processed)
+        probs = self.final_model.predict_proba(X_test_processed)
+        pred_labels = self.label_encoder.inverse_transform(preds)
+
+        results = pd.DataFrame({
+            "ID": test_df.get("ID", range(len(test_df))),
+            "predicted_rainfall": pred_labels,
+            "confidence": np.max(probs, axis=1)
+        })
+        for i, cls in enumerate(self.label_encoder.classes_):
+            results[f"prob_{cls}"] = probs[:, i]
+
+        # If ground truth available → evaluate
+        if y_true is not None:
+            y_true_enc = self.label_encoder.transform(y_true)
+            acc = accuracy_score(y_true_enc, preds)
+            print(f"\nTest Accuracy: {acc:.4f}")
+            print(classification_report(y_true_enc, preds, target_names=self.label_encoder.classes_))
+            cm = confusion_matrix(y_true_enc, preds)
+            print("\nConfusion Matrix:\n", cm)
+
+        return results
+
+    # Saving results
+    def save_submission(self, test_file, sample_submission_file, output_file="submission.csv"):
+        """
+        Generate a submission CSV that matches SampleSubmission.csv format.
+        """
+        test_df = pd.read_csv(test_file)
+        processed_test = self.preprocess_data(test_df)
+
+        exclude = ["Target", "ID", "prediction_time", "user_id"]
+        X_test = processed_test[[c for c in processed_test.columns if c not in exclude]]
+        X_test_processed = self.preprocessor.transform(X_test)
+
+        preds = self.final_model.predict(X_test_processed)
+        pred_labels = self.label_encoder.inverse_transform(preds)
+
+        # Load sample submission
+        sample_sub = pd.read_csv(sample_submission_file)
+        submission = sample_sub.copy()
+        submission.iloc[:, 1] = pred_labels  # assumes column 1 is the label
+
+        submission.to_csv(output_file, index=False)
+        print(f"✅ Submission file saved: {output_file}")
+        return submission
+
+
+
+
+
+
 
 
 
